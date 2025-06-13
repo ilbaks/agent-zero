@@ -1,0 +1,147 @@
+# Use the NVIDIA CUDA base image with Ubuntu
+FROM nvidia/cuda:12.3.0-devel-ubuntu22.04
+
+# Set non-interactive installation and timezone
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Check if the argument is provided, else throw an error
+ARG BRANCH
+RUN if [ -z "$BRANCH" ]; then echo "ERROR: BRANCH is not set!" >&2; exit 1; fi
+ENV BRANCH=$BRANCH
+
+# Set locale to en_US.UTF-8 and timezone to UTC
+RUN apt-get update && apt-get install -y locales tzdata
+RUN sed -i -e 's/# \(en_US\.UTF-8 .*\)/\1/' /etc/locale.gen && \
+    dpkg-reconfigure --frontend=noninteractive locales && \
+    update-locale LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+RUN echo "UTC" > /etc/timezone
+RUN dpkg-reconfigure -f noninteractive tzdata
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+ENV TZ=UTC
+
+# Copy contents of the project to root directory
+COPY ./fs/ /
+ENV SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+ENV SEARXNG_LIMITER_PATH=/etc/searxng/limiter.toml
+
+
+# Fix permissions for cron files
+RUN chmod 0644 /etc/cron.d/* || true
+
+# Install essential packages
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    python3 \
+    python3-venv \
+    python3-pip \
+    openssh-server \
+    sudo \
+    curl \
+    wget \
+    git \
+    ffmpeg \
+    cron \
+    software-properties-common
+
+# Install Node.js 20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
+
+# Configure Python 3.12
+RUN add-apt-repository -y ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y python3.12 python3.12-venv python3.12-dev && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Bootstrap pip and install supervisor
+RUN python3 -m ensurepip --upgrade && \
+    python3 -m pip install --upgrade pip setuptools wheel supervisor
+
+# Create supervisor directories
+RUN mkdir -p /var/log/supervisor /etc/supervisor/conf.d
+
+# Create root dotfiles
+RUN touch /root/.bashrc /root/.profile && chmod 644 /root/.bashrc /root/.profile
+
+# Create supervisord symlink
+RUN ln -sf $(which supervisord) /usr/bin/supervisord
+
+# Setup SSH
+RUN bash /ins/setup_ssh.sh $BRANCH || true
+
+# Install additional software
+RUN bash /ins/install_additional.sh $BRANCH || true
+
+# Install CUDA dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cuda-cudart-dev-12-8 \
+    libcublas-dev-12-8 \
+    libcudnn8 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set CUDA environment variables
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_VERSION=12.8.1
+
+# Create main virtual environment
+RUN python3 -m venv /opt/venv
+
+# Install UV and basic packages in the venv
+RUN . /opt/venv/bin/activate && \
+    pip install --upgrade pip setuptools wheel && \
+    pip install uv
+
+# Install A0 with proper error handling
+RUN bash /ins/install_A0.sh $BRANCH || { \
+    echo "A0 installation failed, trying manual installation..."; \
+    . /opt/venv/bin/activate && \
+    cd /git/agent-zero && \
+    pip install -r requirements.txt; \
+    }
+
+# Create instruments virtual environment
+ENV INSTRUMENTS_VENV_PATH=/opt/instruments_venv
+RUN python3 -m venv $INSTRUMENTS_VENV_PATH
+
+# Install heavy ML dependencies in instruments venv
+RUN . $INSTRUMENTS_VENV_PATH/bin/activate && \
+    pip install --upgrade pip setuptools wheel && \
+    pip install torch==2.6.0+cu124 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
+    pip install transformers diffusers accelerate safetensors scipy huggingface-hub xformers
+
+# Install PyTorch in main venv (lighter version)
+RUN . /opt/venv/bin/activate && \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# Cleanup and final A0 setup
+ARG CACHE_DATE=none
+RUN echo "cache buster $CACHE_DATE" && bash /ins/install_A02.sh $BRANCH || true
+
+# Post installation
+RUN bash /ins/post_install.sh $BRANCH || true
+
+# Expose ports
+EXPOSE 22 80
+
+# Set executable permissions
+RUN chmod +x /exe/initialize.sh /exe/run_A0.sh /exe/run_searxng.sh
+RUN chmod +x /ins/install_searxng.sh /ins/install_searxng2.sh
+RUN /ins/install_searxng.sh
+
+# Create required users for services
+RUN useradd -r -s /bin/false -d /usr/local/searxng searxng || true
+
+# Fix supervisor configuration ownership
+RUN chown -R root:root /etc/supervisor/conf.d/
+
+# Ensure supervisor can read the config
+RUN chown -R root:root /etc/supervisor/conf.d/ && \
+    chmod 644 /etc/supervisor/conf.d/supervisord.conf
+
+# Initialize runtime
+CMD ["/exe/initialize.sh", "$BRANCH"]
