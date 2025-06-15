@@ -1,4 +1,20 @@
 import os
+import certifi
+
+# on Windows, time.tzset() may be a no-op, but setting TZ→UTC is fine
+os.environ["TZ"] = "UTC"
+try:
+    import time
+
+    time.tzset()
+except AttributeError:
+    pass
+
+# ensure httpx/SSL picks up a valid CA bundle
+os.environ["SSL_CERT_FILE"] = certifi.where()
+
+
+import os
 import sys
 import time
 import socket
@@ -19,8 +35,8 @@ from python.helpers.print_style import PrintStyle
 
 # Set the new timezone to 'UTC'
 os.environ["TZ"] = "UTC"
-# Apply the timezone change
-time.tzset()
+# # Apply the timezone change
+# time.tzset()
 
 # initialize the internal Flask server
 webapp = Flask("app", static_folder=get_abs_path("./webui"), static_url_path="/")
@@ -34,9 +50,7 @@ basic_auth = BasicAuth(webapp)
 
 def is_loopback_address(address):
     loopback_checker = {
-        socket.AF_INET: lambda x: struct.unpack("!I", socket.inet_aton(x))[0]
-        >> (32 - 8)
-        == 127,
+        socket.AF_INET: lambda x: struct.unpack("!I", socket.inet_aton(x))[0] >> (32 - 8) == 127,
         socket.AF_INET6: lambda x: x == "::1",
     }
     address_type = "hostname"
@@ -109,8 +123,7 @@ def requires_auth(f):
             auth = request.authorization
             if not auth or not (auth.username == user and auth.password == password):
                 return Response(
-                    "Could not verify your access level for that URL.\n"
-                    "You have to login with proper credentials",
+                    "Could not verify your access level for that URL.\n" "You have to login with proper credentials",
                     401,
                     {"WWW-Authenticate": 'Basic realm="Login Required"'},
                 )
@@ -155,9 +168,7 @@ def run():
 
     # Get configuration from environment
     port = runtime.get_web_ui_port()
-    host = (
-        runtime.get_arg("host") or dotenv.get_dotenv_value("WEB_UI_HOST") or "localhost"
-    )
+    host = runtime.get_arg("host") or dotenv.get_dotenv_value("WEB_UI_HOST") or "localhost"
     server = None
 
     def register_api_handler(app, handler: type[ApiHandler]):

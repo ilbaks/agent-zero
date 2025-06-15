@@ -1,0 +1,10 @@
+services:
+  agent-zero:
+    container_name: agent-zero-hacking
+    # image: ilbaks/agent-zero-run:hacking
+    image: frdel/agent-zero-run:hacking
+    volumes:
+      - ./agent-zero:/a0
+    ports:
+      - "51080:80"
+      - "51022:22"

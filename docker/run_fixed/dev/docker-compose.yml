@@ -1,0 +1,9 @@
+services:
+  agent-zero:
+    container_name: agent-zero-dev
+    image: frdel/agent-zero-run:development
+    volumes:
+      - ./agent-zero:/a0
+    ports:
+      - "53080:80"
+      - "53022:22"

@@ -1,0 +1,8 @@
+services:
+  agent-zero:
+    container_name: agent-zero
+    image: ilbaks/agent-zero-base:latest
+    volumes:
+      - ./agent-zero:/a0
+    ports:
+      - "50080:80"
